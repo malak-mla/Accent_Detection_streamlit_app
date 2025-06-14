@@ -1,0 +1,7 @@
+streamlit==1.34.0
+pydub==0.25.1
+requests==2.31.0
+SpeechRecognition==3.10.0
+torch==2.3.0
+speechbrain==0.5.16
+ffmpeg-python==0.2.0
