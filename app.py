@@ -1,5 +1,4 @@
 import streamlit as st
-import requests
 import os
 import torch
 from pydub import AudioSegment
@@ -8,120 +7,67 @@ from speechbrain.pretrained import EncoderClassifier
 import tempfile
 import numpy as np
 import re
-import io
+import subprocess
+
 
 # Initialize models (cached for performance)
 @st.cache_resource
 def load_accent_model():
     return EncoderClassifier.from_hparams(
-        source="speechbrain/acc-identification-commonaccent_ecapa",
-        savedir="pretrained_models"
+        source='speechbrain/acc-identification-commonaccent_ecapa',
+        savedir='pretrained_models'
     )
 
-def download_file(url):
-    """Download file from URL without size limit"""
+def download_video(url, output_file='input_video.mp4'):
+    """Download video from YouTube or a direct link with yt-dlp."""
     try:
-        # Verify URL format
-        if not re.match(r'^https?://', url, re.I):
-            raise ValueError("Invalid URL format")
-            
-        # Get filename from URL
-        filename = url.split("/")[-1].split("?")[0]
-        if not filename:
-            filename = "video.mp4"
-            
-        response = requests.get(url, stream=True)
-        if response.status_code != 200:
-            raise Exception(f"Failed to download file (HTTP {response.status_code})")
-        
-        # Use BytesIO to avoid temporary files
-        file_bytes = io.BytesIO()
-        for chunk in response.iter_content(chunk_size=8192):
-            file_bytes.write(chunk)
-        file_bytes.seek(0)
-        
-        return file_bytes, filename
-        
+        cmd = ['yt-dlp', '-v', '-f', 'best', '-o', output_file, url]
+        subprocess.run(cmd, check=True)
+        return output_file
     except Exception as e:
         st.error(f"Download error: {str(e)}")
-        return None, None
+        return None
 
-def extract_audio(file_bytes, filename):
-    """Extract audio from video without duration limit"""
+
+
+def extract_audio(video_file):
+    """Extract audio from video without duration limit."""
     try:
-        # Create temporary file-like object
-        with tempfile.NamedTemporaryFile(delete=False, suffix=os.path.splitext(filename)[1]) as tmp_file:
-            tmp_file.write(file_bytes.read())
-            tmp_path = tmp_file.name
-            
-        # Load audio from temporary file
-        audio = AudioSegment.from_file(tmp_path)
-        
-        # Clean up temporary file
-        os.unlink(tmp_path)
-        
-        # Convert to mono and resample
-        audio = audio.set_channels(1).set_frame_rate(16000)
-        
-        # Normalize audio volume to improve speech detection
-        audio = audio.normalize()
-        
-        # Convert to WAV in memory
-        wav_bytes = io.BytesIO()
-        audio.export(wav_bytes, format="wav")
-        wav_bytes.seek(0)
-        
-        return wav_bytes, len(audio)
-        
+        audio_file = video_file.rsplit('.', 1)[0] + ".wav"
+
+        # Extract audio with ffmpeg
+        cmd = ['ffmpeg', '-i', video_file, '-ac', '1', '-ar', '16000', '-y', audio_file]
+        subprocess.run(cmd, check=True)
+
+        return audio_file
+
     except Exception as e:
         st.error(f"Audio extraction error: {str(e)}")
-        return None, 0
+        return None
 
-def transcribe_audio(wav_bytes):
-    """Transcribe audio and return text with enhanced detection"""
+
+def transcribe_audio(wav_file):
+    """Transcribe audio to text with Speech Recognition."""
     recognizer = sr.Recognizer()
-    
-    # Adjust energy threshold for better detection
     recognizer.energy_threshold = 300
     recognizer.dynamic_energy_threshold = True
-    
-    # Create temporary WAV file for recognition
-    with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as tmp_wav:
-        tmp_wav.write(wav_bytes.read())
-        tmp_wav_path = tmp_wav.name
-    
+
     try:
-        with sr.AudioFile(tmp_wav_path) as source:
-            # Listen with longer timeout
+        with sr.AudioFile(wav_file) as source:
             audio_data = recognizer.record(source)
             return recognizer.recognize_google(audio_data)
-    except sr.WaitTimeoutError:
-        return ""
-    except sr.UnknownValueError:
-        return ""
     except Exception as e:
-        st.error(f"Speech recognition error: {str(e)}")
-        return ""
-    finally:
-        # Clean up temporary file
-        os.unlink(tmp_wav_path)
+        st.error(f"Transcribe error: {str(e)}")
+        return ''
 
-def classify_accent(wav_bytes, model):
-    """Classify accent and return results"""
+
+def classify_accent(wav_file, model):
+    """Classify the accent of the speaker in the audio file."""
     try:
-        # Create temporary file for classification
-        with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as tmp_wav:
-            tmp_wav.write(wav_bytes.read())
-            tmp_wav_path = tmp_wav.name
-        
-        # Get classification
-        out_prob, score, index, text_lab = model.classify_file(tmp_wav_path)
+        out_prob, score, index, text_lab = model.classify_file(wav_file)
         accent_code = text_lab[0]
         confidence = torch.exp(score).item() * 100
-        
-        # Clean up temporary file
-        os.unlink(tmp_wav_path)
-        
+
         # Map accent codes to human-readable names
         accent_map = {
             'au': 'Australian',
@@ -132,75 +78,62 @@ def classify_accent(wav_bytes, model):
             'afr': 'African',
             'sp': 'Spanish'
         }
-        
+
         return accent_map.get(accent_code, accent_code), min(confidence, 100)
-        
+
     except Exception as e:
         st.error(f"Accent classification error: {str(e)}")
         return "Error", 0.0
 
+
 # Streamlit UI
 st.title("🎤 English Accent Detection")
 st.write("""
-Upload a public video URL to analyze the speaker's English accent.
-**Note:** Large files may take longer to process.
+Analyze the speaker's English accent from a video (direct link or YouTube).
+**Note:** Large files may take a while to process.
 """)
 
-video_url = st.text_input("Enter video URL:", placeholder="https://example.com/video.mp4")
+input_url = st.text_input("Enter video URL (direct or YouTube)", 
+                           placeholder='https://www.youtube.com/watch?v=sGvHsGvcrGQ')
 
 if st.button("Analyze Accent"):
-    if not video_url:
-        st.warning("Please enter a valid video URL")
+
+    if not input_url:
+        st.error("Please provide a video URL.")
     else:
         with st.spinner("Downloading video..."):
-            file_bytes, filename = download_file(video_url)
-            if file_bytes is None:
+            video_file = download_video(input_url)
+            if not video_file:
                 st.stop()
-                
-        with st.spinner("Extracting audio..."):
-            wav_bytes, audio_duration = extract_audio(file_bytes, filename)
-            if wav_bytes is None:
+
+        with st.spinner("Extracting audio from video..."):
+            wav_file = extract_audio(video_file)
+            if not wav_file:
                 st.stop()
-                
-            duration_seconds = audio_duration / 1000
-            wav_bytes.seek(0)  # Reset pointer
-            
-            # Audio preview
-            st.subheader("Extracted Audio")
-            st.audio(wav_bytes, format='audio/wav')
-            st.caption(f"Audio duration: {duration_seconds:.1f} seconds")
-            
-        with st.spinner("Detecting speech..."):
-            # Make a copy for transcription
-            transcribe_bytes = io.BytesIO(wav_bytes.getvalue())
-            transcription = transcribe_audio(transcribe_bytes)
-            
+
+        st.audio(wav_file)
+
+        with st.spinner("Transcribing audio..."):
+            transcription = transcribe_audio(wav_file)
             if not transcription:
-                st.error("No English speech detected in the audio")
+                st.error("No English speech detected in the audio.")
                 st.stop()
-                
-        with st.spinner("Analyzing accent..."):
-            # Make a copy for classification
-            classify_bytes = io.BytesIO(wav_bytes.getvalue())
+
+        with st.spinner("Classifying accent..."):
             model = load_accent_model()
-            accent, confidence = classify_accent(classify_bytes, model)
-            
-        # Display results
+            accent, confidence = classify_accent(wav_file, model)
+
+        st.success("Analysis complete.")
         st.subheader("Analysis Results")
         col1, col2 = st.columns(2)
         col1.metric("Detected Accent", accent)
         col2.metric("Confidence Score", f"{confidence:.1f}%")
-        
-        st.progress(int(confidence))
-        
-        # Explanation
-        st.subheader("Detailed Summary")
-        st.write(f"""
-        - 🗣️ **Speech Detected**: Yes
-        - 📝 **Transcription Excerpt**: `{transcription[:100]}{'...' if len(transcription) > 100 else ''}`
-        - 🎯 **Accent Classification**: {accent}
-        - ✅ **Confidence**: {'Strong' if confidence > 75 else 'Moderate' if confidence > 50 else 'Weak'}
-        - ⏱️ **Audio Processed**: {duration_seconds:.1f}s
-        """)
 
-st.caption("Built with ❤️ using Python, SpeechBrain, and Streamlit")
+        st.progress(int(confidence))
+
+        st.subheader("Summary")
+        st.write(f"""- 🗣 **Transcription**: {transcription}
+- 🌟 **Predicted Accent**: {accent}
+- ✅ **Confidence**: {confidence:.1f}%""")
+
+st.caption("Built with ❤️ using Streamlit, SpeechBrain, and yt-dlp")
