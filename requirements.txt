@@ -5,3 +5,4 @@ SpeechRecognition==3.10.0
 torch==2.3.0
 speechbrain==0.5.16
 ffmpeg-python==0.2.0
+numpy==1.26.4
