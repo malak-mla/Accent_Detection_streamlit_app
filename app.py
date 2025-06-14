@@ -8,6 +8,10 @@ from speechbrain.pretrained import EncoderClassifier
 from io import BytesIO
 import tempfile
 
+# Configuration
+MAX_FILE_SIZE = 20 * 1024 * 1024  # 20MB
+MAX_AUDIO_DURATION = 60000  # 60 seconds (in milliseconds)
+
 # Initialize models (cached for performance)
 @st.cache_resource
 def load_accent_model():
@@ -17,25 +21,51 @@ def load_accent_model():
     )
 
 def download_file(url):
-    """Download file from URL and return local path"""
+    """Download file from URL with size limit"""
+    # Get content length first
+    head_response = requests.head(url)
+    if 'content-length' in head_response.headers:
+        file_size = int(head_response.headers['content-length'])
+        if file_size > MAX_FILE_SIZE:
+            raise ValueError(f"File too large ({file_size/1024/1024:.1f}MB > {MAX_FILE_SIZE/1024/1024}MB limit)")
+    
     response = requests.get(url, stream=True)
     if response.status_code != 200:
         raise Exception(f"Failed to download file (HTTP {response.status_code})")
     
+    # Check extension
     ext = url.split('.')[-1].lower()
-    if ext not in ['mp4', 'mov', 'avi', 'webm']:
+    if ext not in ['mp4', 'mov', 'avi', 'webm', 'mkv']:
         ext = 'mp4'  # Default extension
     
+    # Download with size limit
+    downloaded_bytes = 0
     with tempfile.NamedTemporaryFile(delete=False, suffix=f'.{ext}') as tmp_file:
         for chunk in response.iter_content(chunk_size=8192):
+            downloaded_bytes += len(chunk)
+            if downloaded_bytes > MAX_FILE_SIZE:
+                raise ValueError(f"File exceeds {MAX_FILE_SIZE/1024/1024}MB size limit")
             tmp_file.write(chunk)
         return tmp_file.name
 
 def extract_audio(video_path):
-    """Extract audio from video and return WAV path"""
-    audio = AudioSegment.from_file(video_path)
-    audio = audio.set_channels(1)  # Convert to mono
-    audio = audio.set_frame_rate(16000)  # Resample to 16kHz
+    """Extract audio from video with duration limit"""
+    try:
+        audio = AudioSegment.from_file(video_path)
+    except:
+        # Try different formats
+        try:
+            audio = AudioSegment.from_file(video_path, format="mp4")
+        except Exception as e:
+            raise ValueError(f"Unsupported video format: {str(e)}")
+    
+    # Convert to mono and resample
+    audio = audio.set_channels(1).set_frame_rate(16000)
+    
+    # Truncate to max duration
+    if len(audio) > MAX_AUDIO_DURATION:
+        audio = audio[:MAX_AUDIO_DURATION]
+        st.warning(f"Audio truncated to {MAX_AUDIO_DURATION/1000} seconds")
     
     with tempfile.NamedTemporaryFile(delete=False, suffix='.wav') as tmp_audio:
         audio.export(tmp_audio.name, format="wav")
@@ -67,7 +97,10 @@ def classify_accent(audio_path, model):
             'au': 'Australian',
             'ca': 'Canadian',
             'uk': 'British',
-            'us': 'American'
+            'us': 'American',
+            'ind': 'Indian',
+            'afr': 'African',
+            'sp': 'Spanish'
         }
         
         return accent_map.get(accent_code, accent_code), min(confidence, 100)
@@ -77,9 +110,9 @@ def classify_accent(audio_path, model):
 
 # Streamlit UI
 st.title("🎤 English Accent Detection")
-st.write("""
+st.write(f"""
 Upload a public video URL to analyze the speaker's English accent.
-Supported formats: MP4, Loom links, or direct video links.
+**Limits:** Max {MAX_FILE_SIZE/1024/1024}MB file, {MAX_AUDIO_DURATION/1000}s audio analyzed
 """)
 
 video_url = st.text_input("Enter video URL:", placeholder="https://example.com/video.mp4")
@@ -88,20 +121,23 @@ if st.button("Analyze Accent"):
     if not video_url:
         st.warning("Please enter a valid video URL")
     else:
-        with st.spinner("Processing video..."):
+        with st.spinner("Processing..."):
             try:
                 # Step 1: Download video
                 video_path = download_file(video_url)
                 
                 # Step 2: Extract audio
                 audio_path = extract_audio(video_path)
+                
+                # Audio preview
+                st.subheader("Extracted Audio")
                 st.audio(audio_path, format='audio/wav')
                 
                 # Step 3: Transcribe audio
                 transcription = transcribe_audio(audio_path)
                 
                 if not transcription:
-                    st.error("No English speech detected")
+                    st.error("No English speech detected in the first 60 seconds")
                     st.stop()
                 
                 # Step 4: Classify accent
@@ -109,27 +145,32 @@ if st.button("Analyze Accent"):
                 accent, confidence = classify_accent(audio_path, model)
                 
                 # Display results
-                st.subheader("Results")
-                st.metric("Detected Accent", accent)
-                st.metric("Confidence Score", f"{confidence:.1f}%")
+                st.subheader("Analysis Results")
+                col1, col2 = st.columns(2)
+                col1.metric("Detected Accent", accent)
+                col2.metric("Confidence Score", f"{confidence:.1f}%")
                 
                 st.progress(int(confidence))
                 
                 # Explanation
-                st.subheader("Analysis Summary")
+                st.subheader("Detailed Summary")
                 st.write(f"""
                 - 🗣️ **Speech Detected**: {'Yes' if transcription else 'No'}
-                - 📝 **Transcription Excerpt**: `{transcription[:50]}...`
+                - 📝 **Transcription Excerpt**: `{transcription[:100]}{'...' if len(transcription) > 100 else ''}`
                 - 🎯 **Accent Classification**: {accent}
                 - ✅ **Confidence**: {'Strong' if confidence > 75 else 'Moderate' if confidence > 50 else 'Weak'}
+                - ⏱️ **Audio Processed**: {min(len(AudioSegment.from_file(audio_path)), MAX_AUDIO_DURATION)/1000}s
                 """)
                 
             except Exception as e:
-                st.error(f"Processing error: {str(e)}")
+                st.error(f"Error: {str(e)}")
             finally:
                 # Clean up temporary files
                 for path in [video_path, audio_path]:
                     if path and os.path.exists(path):
-                        os.unlink(path)
+                        try:
+                            os.unlink(path)
+                        except:
+                            pass
 
 st.caption("Built with ❤️ using Python, SpeechBrain, and Streamlit")
