@@ -1,17 +1,28 @@
 # 🎤 English Accent Detection
 
-Analyze the speaker's English accent from a video (direct link ).  
-This tool is designed to aid in evaluating a candidate’s English pronunciation for hiring purposes.
+Analyze the English accent from a video or audio file — a tool designed for recruiters or organizations that want to aid their decisions with automated, data-informed assessments
 
 ---
+## Overview:
+This Streamlit application performs the following:
+
+- Downloads a video or audio file from a direct URL.
+
+- Extracts its audio track.
+
+- Transcribes the speech to text.
+
+- Detects the English accent of the speaker (British, American, Canadian, Australian, etc.).
+
+- Displays a confidence score alongside the transcription.
 
 ## Features:
 
-✅ Accepts **direct video URLs * (standard or shorts).  
-✅ Extracts audio and parses the speaker’s pronunciation.  
-✅ Detects the English accent (British, American, Australian, etc.).  
-✅ Shows confidence score alongside the detection.  
-✅ Displays a brief transcript of the audio.
++ ✅ Transcribes the audio to text (using Speech Recognition’s Google API)
+- ✅ Detects the English accent with SpeechBrain’s ECAPA classifier
+- ✅ Displays confidence score and audio duration
+- ✅ Streamlit UI for easy interaction — no coding needed to use the tool
+- ✅ Audio preview directly within Streamlit
 
 ---
 
@@ -27,24 +38,63 @@ This tool is designed to aid in evaluating a candidate’s English pronunciation
 ---
 ### Installation:
 
-git clone <your-repo-url>
-cd <your-repo-name>
+To run this application, make sure you have Python 3.8+ installed.
+
+### 1-Clone or download this repository:
+
+git clone <your-repository-url>
+
+cd your-repository-name
+
+### 2-Create a virtual environment (optional but recommended):
+
+python -m venv .venv
+
+source .venv/bin/activate  # Linux/Mac
+
+.\venv\Scripts\activate   # Windows
+
+##  Installing of Requirements:
 
 pip install -r requirements.txt
 
-##  Installing FFMPEG (required by pydub and yt-dlp):
-
-sudo apt install ffmpeg
-
 ## Running:
+
 streamlit run app.py
-## Developer Notes:
-- This tool utilizes yt-dlp for video downloading.
 
-- Audio is processed with pydub.
+Then follow the instructions in your browser:
 
-- Seech recognition is powered by Speech Recognition’s recognize_google.
+- Enter a direct video or audio URL in the text box.
 
-- Accent detection is powered by SpeechBrain’s ECAPA classifier.
+- Click Analyze Accent.
 
+- Wait for the process to complete.
 
+- View the transcription, confidence score, and extracted audio preview.
+
+##  File Format Support
+- ✅ Video (MP4, WEBM, MKV, etc)
+- ✅ Audio (MP3, WAV, etc)
+
+##  Model
+- This application utilizes SpeechBrain’s ECAPA classifier for English accent detection.
+
+##  Notes:
+
+- Large files may take a while to process.
+
+- The application is for internal and educational use.
+
+- Transcription depends on the audio’s clarity and the speaker’s pronunciation.
+
+## Built With :
+
++ Python
+
+- Streamlit
+
+- SpeechBrain
+
+- Speech Recognition
+
+- pydub
