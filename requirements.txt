@@ -2,7 +2,6 @@
 streamlit==1.35.0
 yt-dlp==2024.04.09
 moviepy==1.0.3
-openai-whisper==20230314
 torch==2.0.1
 torchaudio==2.0.2
 speechbrain==0.5.15
