@@ -9,80 +9,117 @@ import tempfile
 import numpy as np
 import re
 import io
-import subprocess
+
 
 # ------------------------------------------------------------------------------
 # Model Loading
 # ------------------------------------------------------------------------------
 @st.cache_resource
 def load_accent_model():
-    """Load SpeechBrain ECAPA classifier for English accents."""
+    """Load SpeechBrain's Accent Classification Model with Caching."""
     return EncoderClassifier.from_hparams(
         source='speechbrain/acc-identification-commonaccent_ecapa',
         savedir='pretrained_models'
     )
 
+
 # ------------------------------------------------------------------------------
 # File Operations
 # ------------------------------------------------------------------------------
-def transform_url(url):
-    """Transform YouTube Short URLs to standard URLs if applicable."""
-    if "youtu.be" in url or "/shorts/" in url:
-        video_id = url.split('/')[-1].split('?')[0]
-        return f"https://www.youtube.com/watch?v={video_id}"
-    return url
-
-
-def download_video(url, output_file='input_video.mp4'):
-    """Download video from YouTube or a direct link with yt-dlp."""
+def download_file(url: str):
+    """Download a video or audio file from a URL."""
     try:
-        url = transform_url(url)
-        cmd = ['yt-dlp', '-v', '-f', 'best', '-o', output_file, url]
-        subprocess.run(cmd, check=True)
-        return output_file
+        if not re.match(r'^https?://', url, re.I):
+            raise ValueError("Invalid URL format")
+
+        response = requests.get(url, stream=True)
+        response.raise_for_status()
+
+        # Save to a temporary file in memory
+        file_bytes = io.BytesIO()
+        for chunk in response.iter_content(8192):
+            file_bytes.write(chunk)
+        file_bytes.seek(0)
+
+        # Provide a fallback for naming
+        fname = url.split("/")[-1].split("?")[0] or "input_video.mp4"
+
+        return fname, file_bytes
+
     except Exception as e:
-        st.error(f"Download error: {str(e)}")
-        return None
+        st.error(f"Error downloading the video: {str(e)}")
+        return None, None
 
 
-def extract_audio(video_file):
-    """Extract audio from video and convert to a standardized format."""
+def extract_audio(file_bytes, fname):
+    """Extract Audio from downloaded video or audio."""
     try:
-        audio_file = video_file.split('.')[0] + '.wav'
-        audio = AudioSegment.from_file(video_file)
+        # Store temporarily to extract audio
+        with tempfile.NamedTemporaryFile(delete=False, suffix=os.path.splitext(fname)[1]) as tmp_file:
+            tmp_file.write(file_bytes.read()) 
+            tmp_file_path = tmp_file.name
+
+        # Extract and convert
+        audio = AudioSegment.from_file(tmp_file_path)
+        os.unlink(tmp_file_path)
+
         audio = audio.set_channels(1).set_frame_rate(16000)
         audio = audio.normalize()
-        audio.export(audio_file, format='wav')
-        return audio_file, len(audio) / 1000
+
+        # Export back to memory
+        wav_bytes = io.BytesIO()
+        audio.export(wav_bytes, format='wav')
+        wav_bytes.seek(0)
+
+        return wav_bytes, len(audio)
+
     except Exception as e:
-        st.error(f"Audio extraction error: {str(e)}")
+        st.error(f"Error extracting audio: {str(e)}")
         return None, 0
 
 
-def transcribe_audio(wav_file):
-    """Transcribe the audio to text with Speech Recognition."""
+# ------------------------------------------------------------------------------
+# Transcribe Audio
+# ------------------------------------------------------------------------------
+def transcribe_audio(wav_bytes):
+    """Transcribe Audio to Text with Speech Recognition (Google) API."""
     recognizer = sr.Recognizer()
     recognizer.energy_threshold = 300
     recognizer.dynamic_energy_threshold = True
 
-    with sr.AudioFile(wav_file) as source:
-        audio_data = recognizer.record(source)
-        try:
-            return recognizer.recognize_google(audio_data)
-        except sr.UnknownValueError:
-            return ""
-        except Exception as e:
-            st.error(f"Speech recognition error: {str(e)}")
-            return ""
+    with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as tmp_wav:
+        tmp_wav.write(wav_bytes.read()) 
+        tmp_wav_file = tmp_wav.name
 
-def classify_accent(wav_file, model):
-    """Classify the speaker's English accent with ECAPA classifier."""
     try:
-        out_prob, score, index, text_lab = model.classify_file(wav_file)
-        accent_code = text_lab[0]
-        confidence = torch.exp(score).item() * 100
+        with sr.AudioFile(tmp_wav_file) as source:
+            audio_data = recognizer.record(source)
+            transcription = recognizer.recognize_google(audio_data)
+    except Exception as e:
+        st.error(f"Transcribe Audio Error: {str(e)}")
+        transcription = ""
 
-        # Mapping to human-readable names
+    os.unlink(tmp_wav_file)
+    return transcription
+
+
+# ------------------------------------------------------------------------------
+# Accent Classification
+# ------------------------------------------------------------------------------
+def classify_accent(wav_bytes, model):
+    """Classify Accent using SpeechBrain's ECAPA Model."""
+    try:
+        with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as tmp_wav:
+            tmp_wav.write(wav_bytes.read()) 
+            tmp_wav_file = tmp_wav.name
+
+        out_prob, score, index, text_lab = model.classify_file(tmp_wav_file)
+        accent_code = text_lab[0]
+        confidence = float(torch.exp(score).item()) * 100
+
+        os.unlink(tmp_wav_file)
+
+        # Mapping codes to human-readable names
         accent_map = {
             'au': 'Australian',
             'ca': 'Canadian',
@@ -90,69 +127,72 @@ def classify_accent(wav_file, model):
             'us': 'American',
             'ind': 'Indian',
             'afr': 'African',
-            'sp': 'Spanish'
+            'esp': 'Spanish'
         }
 
-        return accent_map.get(accent_code, accent_code), min(confidence, 100)
+        return accent_map.get(accent_code, f"Unknown: {accent_code}"), min(confidence, 100)
+
     except Exception as e:
-        st.error(f"Accent classification error: {str(e)}")
+        st.error(f"Accent Classification Error: {str(e)}")
         return "Error", 0.0
 
 
 # ------------------------------------------------------------------------------
-# Streamlit UI
+# Streamlit App
 # ------------------------------------------------------------------------------
 st.title("🎤 English Accent Detection")
 st.write("""
-Analyze the speaker's English accent from a video (direct link or YouTube).
+Analyze the English accent from a video or audio by providing its URL.
+This tool is used internally by recruiters to aid their decisions.
 """)
 
+# Input
+video_url = st.text_input("Enter video URL (public)", placeholder='https://example.com/video.mp4')
 
-# Input for video URL
-video_url = st.text_input("Enter video URL (direct or YouTube)", 
-                           placeholder='https://www.youtube.com/watch?v=abcd1234')
-
+# Action
 if st.button("Analyze Accent"):
+
     if not video_url:
         st.error("Please enter a video URL.")
     else:
         with st.spinner("Downloading video..."):
-            video_file = download_video(video_url)
-            if video_file is None:
+            fname, file_bytes = download_file(video_url)
+            if not fname or not file_bytes:
+                st.error("Unable to proceed.")
                 st.stop()
 
         with st.spinner("Extracting audio..."):
-            wav_file, duration = extract_audio(video_file)
-            if wav_file is None:
+            wav_bytes, audio_duration = extract_audio(file_bytes, fname)
+            if wav_bytes is None:
+                st.error("Unable to extract audio.")
                 st.stop()
 
-            st.audio(wav_file)
-            st.caption(f"Audio duration: {duration:.1f} seconds")
+            duration_seconds = audio_duration / 1000
+            wav_bytes.seek(0)  # Reset stream
+
+            st.audio(wav_bytes, format='audio/wav')
+            st.success(f"Audio extracted. Duration: {duration_seconds:.1f} seconds")
 
         with st.spinner("Transcribing audio..."):
-            transcription = transcribe_audio(wav_file)
+            transcription = transcribe_audio(io.BytesIO(wav_bytes.getvalue()))
             if not transcription:
-                st.error("No English speech detected.")
+                st.error("Unable to transcribe.")
                 st.stop()
 
         with st.spinner("Classifying accent..."):
             model = load_accent_model()
-            accent, confidence = classify_accent(wav_file, model)
+            # We need a new copy for classifier
+            wav_bytes_new = io.BytesIO(wav_bytes.getvalue()) 
+            accent, confidence = classify_accent(wav_bytes_new, model)
 
         st.success("Analysis complete.")
-        st.subheader("Analysis Result")
-        st.metric("Detectable Accent", accent)
-        st.metric("Confidence Score", f'{confidence:.1f}%')
-        st.text_area("Transcription", transcription)
+        st.subheader("Analysis Summary")
+        st.write(f"- 📝 Transcription (excerpt): {transcription[:100]}{'...' if len(transcription)>100 else ''}")
+        st.write(f"- 🏹 Detected Accent: **{accent}**")
+        st.write(f"- 🔮 Confidence Score: **{confidence:.1f}%**")
+        st.write(f"- ⏱ Audio Duration: **{duration_seconds:.1f} seconds**")
 
-        st.write(f"""  
-- 📝 Transcription:  
-{transcription}
-
-- 🔹 Accent Detected: {accent}
-- 🔹 Confidence Score: {confidence:.1f}%
-- 🔹 Audio Duration: {duration:.1f} seconds
-""")
+        st.progress(min(int(confidence), 100))
 
 
-st.caption("Built with ❤️ using Streamlit, SpeechBrain, Speech Recognition, pydub, and yt-dlp")
+st.caption("Built with ❤️ using Streamlit, SpeechBrain, and Speech Recognition.")

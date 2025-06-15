@@ -1,12 +1,10 @@
+streamlit===1.35.0
+requests===2.31.0
+speechrecognition===3.10.0
+pydub===0.25.1
+torch===2.0.1
+torchaudio===2.0.2
+speechbrain===0.5.15
+numpy===1.24.4
 
-streamlit==1.35.0
-yt-dlp==2024.04.09
-moviepy==1.0.3
-torch==2.0.1
-torchaudio==2.0.2
-speechbrain==0.5.15
-numpy==1.24.4
-validators==0.0.0
-pydub==0.25.1
-SpeechRecognition==3.10.0
 

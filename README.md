@@ -1,13 +1,13 @@
 # 🎤 English Accent Detection
 
-Analyze the speaker's English accent from a video (direct link or YouTube).  
+Analyze the speaker's English accent from a video (direct link ).  
 This tool is designed to aid in evaluating a candidate’s English pronunciation for hiring purposes.
 
 ---
 
 ## Features:
 
-✅ Accepts **direct video URLs or YouTube URLs** (standard or shorts).  
+✅ Accepts **direct video URLs * (standard or shorts).  
 ✅ Extracts audio and parses the speaker’s pronunciation.  
 ✅ Detects the English accent (British, American, Australian, etc.).  
 ✅ Shows confidence score alongside the detection.  
